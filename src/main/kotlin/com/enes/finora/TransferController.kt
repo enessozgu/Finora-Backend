@@ -1,14 +1,13 @@
 
 package com.enes.finora
 
+import com.enes.finora.service.TransferService
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.*
 import java.math.BigDecimal
-import java.time.LocalDateTime
 import java.util.Locale
-import java.util.UUID
 
-// Android'den gelecek transfer bilgileri
+// Android'den gelen transfer isteği
 data class TransferRequest(
     val iban: String,
     val recipientName: String,
@@ -16,7 +15,7 @@ data class TransferRequest(
     val description: String? = null
 )
 
-// Backend'in Android'e döndüreceği cevap
+// Android'e döndürülen transfer cevabı
 data class TransferResponse(
     val status: String,
     val message: String,
@@ -30,26 +29,28 @@ data class TransferResponse(
 
 @RestController
 @RequestMapping("/api/v1/transfers")
-class TransferController {
+class TransferController(
+    private val transferService: TransferService
+) {
 
+    // POST: Yeni transfer oluştur ve veritabanına kaydet
     @PostMapping
     fun createTransfer(
         @RequestBody request: TransferRequest
     ): ResponseEntity<TransferResponse> {
 
-        // IBAN boşluklarını temizle
         val iban = request.iban
             .filterNot { it.isWhitespace() }
             .uppercase(Locale.ROOT)
 
         val recipientName = request.recipientName.trim()
 
-        // IBAN format kontrolü
+        // IBAN kontrolü
         if (!iban.matches(Regex("^TR\\d{24}$"))) {
             return ResponseEntity.badRequest().body(
                 TransferResponse(
                     status = "REJECTED",
-                    message = "Geçerli formatta bir TR IBAN girilmelidir."
+                    message = "Geçerli bir TR IBAN girilmelidir."
                 )
             )
         }
@@ -74,17 +75,58 @@ class TransferController {
             )
         }
 
-        // Demo transfer cevabı
-        val response = TransferResponse(
-            status = "DEMO_PREVIEW",
-            message = "Transfer talebi başarıyla doğrulandı. Gerçek para transferi yapılmadı.",
-            transferId = UUID.randomUUID().toString(),
-            recipientName = recipientName,
+        // Açıklama kontrolü
+        if ((request.description?.length ?: 0) > 100) {
+            return ResponseEntity.badRequest().body(
+                TransferResponse(
+                    status = "REJECTED",
+                    message = "Açıklama en fazla 100 karakter olabilir."
+                )
+            )
+        }
+
+        // Transferi PostgreSQL'e kaydet
+        val savedTransfer = transferService.saveDemoTransfer(
             iban = iban,
+            recipientName = recipientName,
             amount = request.amount,
-            description = request.description?.trim(),
-            createdAt = LocalDateTime.now().toString()
+            description = request.description?.trim()
         )
+
+        // API cevabını hazırla
+        val response = TransferResponse(
+            status = savedTransfer.status,
+            message = "Demo transfer veritabanına kaydedildi. Gerçek para transferi yapılmadı.",
+            transferId = savedTransfer.id.toString(),
+            recipientName = savedTransfer.recipientName,
+            iban = savedTransfer.iban,
+            amount = savedTransfer.amount,
+            description = savedTransfer.description,
+            createdAt = savedTransfer.createdAt.toString()
+        )
+
+        return ResponseEntity.ok(response)
+    }
+
+    // GET: Veritabanındaki tüm transferleri listele
+    @GetMapping
+    fun getAllTransfers(): ResponseEntity<List<TransferResponse>> {
+
+        val transfers = transferService.getAllTransfers()
+
+        val response = transfers.map { transfer ->
+
+            TransferResponse(
+                status = transfer.status,
+                message = "Kayıtlı demo transfer",
+                transferId = transfer.id.toString(),
+                recipientName = transfer.recipientName,
+                iban = transfer.iban,
+                amount = transfer.amount,
+                description = transfer.description,
+                createdAt = transfer.createdAt.toString()
+            )
+        }
 
         return ResponseEntity.ok(response)
     }
